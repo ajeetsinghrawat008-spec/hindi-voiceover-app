@@ -1,0 +1,6 @@
+{
+  "name": "Hindi AI Voiceover Generator",
+  "description": "Studio-quality Hindi male voiceover generator powered by Google Cloud Text-to-Speech with five cinematic tones, pitch/speed controls, and MP3/WAV download.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
