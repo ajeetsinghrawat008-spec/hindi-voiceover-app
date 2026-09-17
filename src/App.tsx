@@ -9,6 +9,60 @@ import { VOICE_TONES, DEFAULT_SCRIPT } from './data/tones';
 import { VoiceToneId, SynthesizeResponse } from './types';
 import { Wand2, Loader2, PlayCircle, AlertCircle } from 'lucide-react';
 
+/**
+ * Safely fetches JSON from the API, handling transient server boot screens,
+ * automatic retries if the server container is warming up, and human-friendly error messages.
+ */
+async function safeApiFetch<T>(
+  url: string,
+  options?: RequestInit,
+  retriesRemaining: number = 3
+): Promise<T> {
+  try {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      return data;
+    }
+
+    // Response is not JSON (e.g. HTML or text)
+    const rawText = await response.text();
+    const isStartingUp =
+      rawText.includes('Starting Server...') ||
+      rawText.includes('starting up') ||
+      response.status === 502 ||
+      response.status === 503;
+
+    if (isStartingUp && retriesRemaining > 0) {
+      // Wait 1.5 seconds for container/server process to initialize, then retry
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return await safeApiFetch<T>(url, options, retriesRemaining - 1);
+    }
+
+    if (isStartingUp) {
+      throw new Error(
+        'सर्वर अभी तैयार हो रहा है (The server is initializing). कृपया 3-5 सेकंड बाद पुनः प्रयास करें।'
+      );
+    }
+
+    const cleanSnippet = rawText.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+    throw new Error(
+      `Server returned HTTP ${response.status}: ${cleanSnippet || response.statusText || 'Non-JSON response'}`
+    );
+  } catch (err: any) {
+    if (
+      retriesRemaining > 0 &&
+      (err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError'))
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return await safeApiFetch<T>(url, options, retriesRemaining - 1);
+    }
+    throw err;
+  }
+}
+
 export default function App() {
   const [script, setScript] = useState(DEFAULT_SCRIPT);
   const [selectedToneId, setSelectedToneId] = useState<VoiceToneId>('deep-attractive');
@@ -21,15 +75,14 @@ export default function App() {
 
   // Load a test sample on initial mount so player is immediately functional
   useEffect(() => {
-    fetch('/api/test-sample')
-      .then((res) => res.json())
+    safeApiFetch<SynthesizeResponse>('/api/test-sample')
       .then((data: SynthesizeResponse) => {
         if (data.success && data.audioContent) {
           setGeneratedAudio(data);
         }
       })
       .catch((err) => {
-        console.error('Failed to load initial test sample:', err);
+        console.warn('Initial test sample fetch deferred:', err);
       });
   }, []);
 
@@ -48,7 +101,7 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const response = await fetch('/api/synthesize', {
+      const data = await safeApiFetch<SynthesizeResponse>('/api/synthesize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -62,9 +115,7 @@ export default function App() {
         }),
       });
 
-      const data: SynthesizeResponse = await response.json();
-
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || 'Voice synthesis request failed');
       }
 
@@ -86,7 +137,7 @@ export default function App() {
   // Helper for downloading WAV if originally generated as MP3
   const handleFetchWavData = async (): Promise<string | null> => {
     try {
-      const response = await fetch('/api/synthesize', {
+      const data = await safeApiFetch<SynthesizeResponse>('/api/synthesize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -100,7 +151,6 @@ export default function App() {
         }),
       });
 
-      const data: SynthesizeResponse = await response.json();
       return data.audioContent || null;
     } catch (err) {
       console.error('Error retrieving WAV format:', err);
@@ -112,13 +162,13 @@ export default function App() {
     setIsGenerating(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/test-sample');
-      const data: SynthesizeResponse = await res.json();
+      const data = await safeApiFetch<SynthesizeResponse>('/api/test-sample');
       if (data.success && data.audioContent) {
         setGeneratedAudio(data);
       }
     } catch (err: any) {
       console.error('Error fetching test sample:', err);
+      setErrorMessage(err?.message || 'Failed to fetch test sample');
     } finally {
       setIsGenerating(false);
     }
